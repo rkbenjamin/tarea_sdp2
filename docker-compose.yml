@@ -1,0 +1,234 @@
+services:
+  almacenamiento:
+    build: ./almacenamiento
+    volumes:
+      - ./data:/data
+    ports:
+      - "5004:5004"
+    networks: [appnet]
+
+  cache:
+    build: ./cache
+    environment:
+      - CACHE_CAPACITY=900
+      - CACHE_POLICY=LRU
+      - CACHE_TTL=4200
+    ports:
+      - "5001:5001"
+    networks: [appnet]
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama:/root/.ollama
+    networks: [appnet]
+
+  llm:
+    build: ./llm
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=tinyllama
+      - LLM_DELAY_MS=0
+    ports:
+      - "5002:5002"
+    depends_on:
+      - ollama
+    networks: [appnet]
+
+  puntaje:
+    build: ./puntaje
+    ports:
+      - "5003:5003"
+    networks: [appnet]
+
+  g_trafico:
+    build: ./g_trafico
+    environment:
+      - ALMACENAMIENTO_URL=http://almacenamiento:5004
+      - CACHE_URL=http://cache:5001
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - TOPIC_PENDING=questions.pending
+      - TRAFFIC_DIST=zipf
+      - ZIPF_ALPHA=1.2
+    depends_on:
+      - kafka
+      - almacenamiento
+      - cache
+    ports:
+      - "5000:5000"
+    networks: [appnet]
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: "2181"
+      ZOOKEEPER_TICK_TIME: "2000"
+    ports:
+      - "2181:2181"
+    networks: [appnet]
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: "1"
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    ports:
+      - "9092:9092"
+    networks: [appnet]
+    restart: unless-stopped
+
+  flink-jobmanager:
+    build: ./flink-runtime
+    container_name: flink-jobmanager
+    command: jobmanager
+    ports: ["8081:8081"]
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        parallelism.default: 1
+    networks: [appnet]
+    restart: unless-stopped
+
+  flink-taskmanager:
+    build: ./flink-runtime
+    container_name: flink-taskmanager
+    depends_on: [flink-jobmanager]
+    command: taskmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+    networks: [appnet]
+    restart: unless-stopped
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka-init
+    depends_on:
+      - kafka
+    entrypoint: [ "bash", "-lc" ]
+    command: |
+      '
+      echo "Esperando a que Kafka responda..."
+      # Intentar listar tópicos hasta que el broker esté OK (evita usar nc)
+      for i in $(seq 1 30); do
+        /usr/bin/kafka-topics --list --bootstrap-server kafka:9092 && break
+        echo "Kafka aún no responde, reintentando ($$i/30)..."
+        sleep 2
+      done
+
+      create_topic () {
+        /usr/bin/kafka-topics --create \
+          --if-not-exists \
+          --bootstrap-server kafka:9092 \
+          --topic "$1" \
+          --partitions 1 \
+          --replication-factor 1
+      }
+
+      create_topic questions.pending
+      create_topic answers.success
+      create_topic errors.overload
+      create_topic errors.quota
+      create_topic results.validated
+      create_topic results.deadletter
+
+      echo "Tópicos verificados/creados:"
+      /usr/bin/kafka-topics --list --bootstrap-server kafka:9092
+      '
+    networks: [appnet]
+    restart: "no"
+
+  llm_worker:
+    build: ./llm_worker
+    container_name: llm_worker
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - TOPIC_PENDING=questions.pending
+      - TOPIC_SUCCESS=answers.success
+      - TOPIC_OVERLOAD=errors.overload
+      - TOPIC_QUOTA=errors.quota
+      - LLM_URL=http://llm:5002/answer
+      - GROUP_ID=llm_worker_group
+      - POLL_MS=500
+    depends_on:
+      - kafka
+      - llm
+    networks: [appnet]
+    restart: unless-stopped
+
+  retry_manager:
+    build: ./retry_manager
+    container_name: retry_manager
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - TOPIC_OVERLOAD=errors.overload
+      - TOPIC_QUOTA=errors.quota
+      - TOPIC_PENDING=questions.pending
+      - TOPIC_DLQ=results.deadletter
+      - GROUP_ID=retry_manager_group
+      - POLL_MS=500
+      - MAX_RETRIES=3
+      - OVERLOAD_BASE_SEC=1
+      - QUOTA_STEP_SEC=60
+    depends_on:
+      - kafka
+    networks: [appnet]
+    restart: unless-stopped
+
+  flink_job:
+    build:
+      context: .
+      dockerfile: ./flink_job/Dockerfile
+    container_name: flink_job
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - PUNTAJE_URL=http://puntaje:5003/compute
+      - THRESHOLD=0.11
+      - MAX_ATTEMPTS=3
+    depends_on:
+      - flink-jobmanager
+      - flink-taskmanager
+      - puntaje
+      - kafka
+    volumes:
+      - ./flink_job:/opt/job
+    command: >
+      bash -lc "flink run -m flink-jobmanager:8081 -py /opt/job/main.py"
+    networks: [appnet]
+    restart: unless-stopped
+
+  persistidor:
+    build: ./persistidor
+    container_name: persistidor
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - TOPIC_VALIDATED=results.validated
+      - ALMACENAMIENTO_URL=http://almacenamiento:5004/save
+      - GROUP_ID=persistidor_group
+    depends_on:
+      - kafka
+      - almacenamiento
+    networks: [appnet]
+    restart: unless-stopped
+
+
+networks:
+  appnet:
+    driver: bridge
