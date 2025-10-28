@@ -24,7 +24,6 @@ def get_producer():
     return Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
 
 def produce_json(producer, topic, obj):
-    # envío síncrono y simple; si prefieres no bloquear, cambia a producer.poll(0)
     producer.produce(topic, json.dumps(obj).encode("utf-8"))
     producer.flush()
 
@@ -57,8 +56,7 @@ def main():
     prod = get_producer()
     cons.subscribe([TOPIC_PENDING])
 
-    # Espera activa a que el broker esté listo y el tópico sea visible
-    for _ in range(30):  # ~30s
+    for _ in range(30):
         try:
             md = cons.list_topics(timeout=1.0)
             if TOPIC_PENDING in md.topics:
@@ -77,7 +75,6 @@ def main():
             if msg.error():
                 code = msg.error().code()
                 if code == KafkaError._PARTITION_EOF:
-                    # fin de partición, continuar
                     continue
                 if code in (KafkaError.UNKNOWN_TOPIC_OR_PART, KafkaError.LEADER_NOT_AVAILABLE):
                     print("[llm_worker] tópico aún no disponible, reintentando...", flush=True)
@@ -87,7 +84,6 @@ def main():
                 time.sleep(2)
                 continue
 
-            # Mensaje válido
             try:
                 payload = json.loads(msg.value().decode("utf-8"))
             except Exception as e:
@@ -112,7 +108,6 @@ def main():
                     data = resp.json()
                     llm_answer = (data.get("answer") or "").strip()
                 except Exception as ex:
-                    # Problemas parseando la respuesta del LLM -> tratar como overload
                     produce_json(prod, TOPIC_OVERLOAD, {
                         "qid": qid,
                         "question": question,

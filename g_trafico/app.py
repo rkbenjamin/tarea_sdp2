@@ -18,7 +18,7 @@ producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
 def send_to_kafka(topic, data):
     try:
         producer.produce(topic, json.dumps(data).encode("utf-8"))
-        producer.poll(0)  # no bloquear
+        producer.poll(0)
         return True, None
     except Exception as e:
         print(f"[g_trafico] ERROR produce Kafka: {e}", flush=True)
@@ -26,7 +26,6 @@ def send_to_kafka(topic, data):
 
 @app.get("/consulta")
 def consulta():
-    # 1) pedir pregunta aleatoria al almacenamiento
     dist  = request.args.get("dist", DEFAULT_DIST).lower()
     alpha = request.args.get("alpha", ZIPF_ALPHA)
     lam   = request.args.get("lambda", POISSON_LAMBDA)
@@ -46,7 +45,6 @@ def consulta():
     q = qrow["title"]
     human_a = qrow["best_answer"]
 
-    # 2) consultar si ya existe un resultado persistido
     try:
         existing = requests.get(f"{ALMACENAMIENTO_URL}/result", params={"question": q}, timeout=5).json()
     except Exception as e:
@@ -54,14 +52,12 @@ def consulta():
 
     if existing.get("ok") and existing.get("found"):
         data = existing["data"]
-        # opcional: cache warm
         try:
             requests.post(f"{CACHE_URL}/insert", json={"question": q, "answer": data["llm_answer"]}, timeout=2)
         except Exception:
             pass
         return jsonify({"from": "almacenamiento", "question": q, **data})
 
-    # 3) no existía => encolar en Kafka
     qid = str(uuid.uuid4())
     payload = {
         "qid": qid,
@@ -72,7 +68,6 @@ def consulta():
     }
     ok, err = send_to_kafka(TOPIC_PENDING, payload)
 
-    # Siempre responder 202 (para no romper el flujo); reporta si Kafka falló
     return jsonify({
         "accepted": True,
         "qid": qid,

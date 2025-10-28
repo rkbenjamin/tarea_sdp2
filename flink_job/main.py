@@ -22,25 +22,19 @@ def HTTP_SCORE(human_answer: str, llm_answer: str) -> float:
         r.raise_for_status()
         return float(r.json().get("puntaje", 0.0))
     except Exception:
-        # En error devuelve 0.0 para permitir reintentos/derivación
         return 0.0
 
 def main():
-    # Modo streaming
     settings = EnvironmentSettings.in_streaming_mode()
     t = TableEnvironment.create(settings)
 
-    # Asegura el intérprete de Python dentro de JM/TM
     t.get_config().set("python.client.executable", "/usr/bin/python3")
     t.get_config().set("python.executable", "/usr/bin/python3")
 
-    # (Opcional) nombre de pipeline para que se vea amigable en el dashboard
     t.get_config().set("pipeline.name", "SD-Tarea2-Scoring-Validator")
 
-    # Registra la UDF
     t.create_temporary_system_function("HTTP_SCORE", HTTP_SCORE)
 
-    # Source: answers.success (Kafka JSON)
     t.execute_sql(f"""
     CREATE TABLE answers_success (
       qid STRING,
@@ -59,7 +53,6 @@ def main():
     )
     """)
 
-    # Sink: results.validated
     t.execute_sql(f"""
     CREATE TABLE results_validated (
       qid STRING,
@@ -77,7 +70,6 @@ def main():
     )
     """)
 
-    # Sink: questions.pending (reintentos)
     t.execute_sql(f"""
     CREATE TABLE questions_pending (
       qid STRING,
@@ -94,7 +86,6 @@ def main():
     )
     """)
 
-    # Sink: results.deadletter
     t.execute_sql(f"""
     CREATE TABLE results_deadletter (
       qid STRING,
@@ -112,7 +103,6 @@ def main():
     )
     """)
 
-    # Vista: computa el score una sola vez por fila
     t.execute_sql("""
     CREATE TEMPORARY VIEW scored AS
     SELECT
@@ -125,10 +115,8 @@ def main():
     FROM answers_success
     """)
 
-    # StatementSet para multiplexar salidas
     ss = t.create_statement_set()
 
-    # 1) Validados
     ss.add_insert_sql(f"""
       INSERT INTO results_validated
       SELECT qid, question, human_answer, llm_answer, attempts, score
@@ -136,7 +124,6 @@ def main():
       WHERE score >= {THRESHOLD}
     """)
 
-    # 2) Reintentos
     ss.add_insert_sql(f"""
       INSERT INTO questions_pending
       SELECT qid, question, human_answer, attempts + 1 AS attempts, 0 AS retry_count
@@ -144,7 +131,6 @@ def main():
       WHERE score < {THRESHOLD} AND attempts < {MAX_ATTEMPTS}
     """)
 
-    # 3) Dead Letter (máx. intentos)
     ss.add_insert_sql(f"""
       INSERT INTO results_deadletter
       SELECT qid, question, human_answer, llm_answer, attempts, 'max_attempts' AS reason
@@ -152,7 +138,6 @@ def main():
       WHERE score < {THRESHOLD} AND attempts >= {MAX_ATTEMPTS}
     """)
 
-    # Ejecuta el job en modo streaming (bloquea)
     ss.execute()
 
 if __name__ == "__main__":

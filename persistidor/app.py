@@ -3,7 +3,7 @@ import requests
 from confluent_kafka import Consumer, KafkaError, KafkaException
 
 BOOT = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
-TOPIC = os.getenv("TOPIC_VALIDATED", "answers.success")  # por ahora consumimos directo de answers.success
+TOPIC = os.getenv("TOPIC_VALIDATED", "answers.success")
 ALMACENAMIENTO_URL = os.getenv("ALMACENAMIENTO_URL", "http://almacenamiento:5004/save")
 GROUP_ID = os.getenv("GROUP_ID", "persistidor_group")
 

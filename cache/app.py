@@ -7,7 +7,7 @@ app = Flask(__name__)
 CAPACITY = int(os.getenv("CACHE_CAPACITY", "500"))
 TTL_SEC  = int(os.getenv("CACHE_TTL", "3600"))
 
-store = OrderedDict()  # key -> (value, expires_at)
+store = OrderedDict()
 
 def now(): return int(time.time())
 
@@ -22,7 +22,7 @@ def set_item(k, v):
     if k in store:
         store.pop(k)
     elif len(store) >= CAPACITY:
-        store.popitem(last=False)  # LRU: saca el más antiguo
+        store.popitem(last=False)
     store[k] = (v, now() + TTL_SEC)
 
 def get_item(k):
@@ -32,7 +32,6 @@ def get_item(k):
     v, exp = store.pop(k)
     if exp < now():
         return None
-    # mover a “más reciente”
     store[k] = (v, exp)
     return v
 

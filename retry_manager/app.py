@@ -11,10 +11,9 @@ TOPIC_DLQ      = os.getenv("TOPIC_DLQ", "results.deadletter")
 GROUP_ID       = os.getenv("GROUP_ID", "retry_manager_group")
 POLL_MS        = int(os.getenv("POLL_MS", "500"))
 
-# límites y backoff
 MAX_RETRIES          = int(os.getenv("MAX_RETRIES", "3"))
-OVERLOAD_BASE_SEC    = float(os.getenv("OVERLOAD_BASE_SEC", "1"))   # 1,2,4,...
-QUOTA_STEP_SEC       = float(os.getenv("QUOTA_STEP_SEC", "60"))     # 60,120,...
+OVERLOAD_BASE_SEC    = float(os.getenv("OVERLOAD_BASE_SEC", "1"))
+QUOTA_STEP_SEC       = float(os.getenv("QUOTA_STEP_SEC", "60"))
 
 def get_consumer():
     return Consumer({
@@ -47,17 +46,15 @@ def handle(msg, p, is_quota):
         produce_json(p, TOPIC_DLQ, data)
         return
 
-    # backoff
     if is_quota:
-        delay = QUOTA_STEP_SEC * (retry_count + 1)   # 60s, 120s, ...
+        delay = QUOTA_STEP_SEC * (retry_count + 1)
     else:
-        delay = OVERLOAD_BASE_SEC * (2 ** retry_count)  # 1s, 2s, 4s, ...
+        delay = OVERLOAD_BASE_SEC * (2 ** retry_count)
 
     print(f"[retry_manager] reintentando ({'quota' if is_quota else 'overload'}) en {delay:.1f}s; retry_count={retry_count+1}")
     time.sleep(delay)
 
     data["retry_count"] = retry_count + 1
-    # republicar a pendientes
     produce_json(p, TOPIC_PENDING, data)
 
 def main():
