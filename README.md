@@ -22,7 +22,7 @@ El sistema busca **mejorar la tolerancia a fallos** y **optimizar la calidad de 
 Generador → Kafka → LLM Manager → Flink → Almacenamiento
                   ↑                         ↓
             retry_manager  ←  feedback (baja calidad)
-
+```
 
 ---
 
