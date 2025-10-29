@@ -66,8 +66,23 @@ Generador → Kafka → LLM Manager → Flink → Almacenamiento
 
 ---
 
-### 1. Clonar y ejecutar
+### 1. Clonar y Ejecutar
 ```bash
 git clone <repositorio>
 cd tareap2_sd
 docker compose up -d --build
+```
+
+### 2. Inicializar base de datos
+```bash
+curl -X POST http://localhost:5004/init
+```
+
+### 3. Realizar consultas
+```bash
+curl "http://localhost:5004/consulta?dist=zipf&alpha=1.2"
+```
+### 4. Revisar estadísticas
+```bash
+curl -s http://localhost:5001/stats | jq
+```
